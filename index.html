@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="theme-color" content="#f5f5f1">
+	<title>HCM | Tasks</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+	<link rel="stylesheet" href="/vendor/select2.min.css">
+	<link rel="stylesheet" href="/styles.css">
+	<script src="/vendor/jquery.min.js" defer></script>
+	<script src="/vendor/select2.min.js" defer></script>
+	<script type="module" src="/app.js"></script>
+</head>
+<body>
+	<section class="auth-screen" id="auth-screen" aria-labelledby="auth-title" hidden>
+		<div class="auth-panel">
+			<a class="brand auth-brand" href="/" aria-label="HCM home">
+				<span class="brand-mark"><span></span><span></span><span></span></span>
+				<span>HCM</span>
+			</a>
+			<div class="auth-eyebrow"><span></span> YOUR PERSONAL WORKSPACE</div>
+			<h1 id="auth-title">Welcome back<span>.</span></h1>
+			<p class="auth-intro" id="auth-intro">Sign in to pick up where you left off.</p>
+			<form id="auth-form" class="auth-form">
+				<label class="auth-field" id="auth-name-field" hidden>
+					<span>Your name</span>
+					<input id="auth-name" name="name" type="text" maxlength="80" autocomplete="name" placeholder="Alex Morgan">
+				</label>
+				<label class="auth-field">
+					<span>Email address</span>
+					<input id="auth-email" name="email" type="email" maxlength="254" autocomplete="email" placeholder="you@example.com" required>
+				</label>
+				<label class="auth-field">
+					<span>Password <small id="password-hint">10 characters minimum</small></span>
+					<input id="auth-password" name="password" type="password" minlength="10" maxlength="128" autocomplete="current-password" placeholder="Enter your password" required>
+				</label>
+				<p class="auth-error" id="auth-error" role="alert" hidden></p>
+				<button class="primary-button auth-submit" id="auth-submit" type="submit">Sign in <span aria-hidden="true">→</span></button>
+			</form>
+			<p class="auth-switch"><span id="auth-switch-copy">New to HCM?</span> <button id="auth-switch" type="button">Create an account</button></p>
+			<div class="auth-footnote"><span class="auth-lock" aria-hidden="true"></span> Your workspace is private to your account.</div>
+		</div>
+	</section>
+	<div class="app-shell" id="app-shell" hidden>
+		<header class="mobile-header">
+			<a class="brand" href="/" aria-label="HCM home">
+				<span class="brand-mark"><span></span><span></span><span></span></span>
+				<span>HCM</span>
+			</a>
+			<button class="menu-toggle" id="sidebar-toggle" type="button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">
+				<span></span><span></span><span></span>
+			</button>
+		</header>
+		<button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="Close navigation" hidden></button>
+		<aside class="sidebar" id="sidebar" aria-label="Task navigation">
+			<a class="brand" href="/" aria-label="HCM home">
+				<span class="brand-mark"><span></span><span></span><span></span></span>
+				<span>HCM</span>
+			</a>
+			<button class="sidebar-close" id="sidebar-close" type="button" aria-label="Close navigation">×</button>
+
+			<button class="new-task-button" id="new-task" type="button"><span aria-hidden="true">+</span> New task <kbd>N</kbd></button>
+
+			<div class="nav-label">WORKSPACE</div>
+			<nav class="primary-nav" id="primary-nav" aria-label="Views">
+				<button class="nav-item is-active" type="button" data-filter="all"><span class="nav-icon icon-inbox" aria-hidden="true"></span><span>All tasks</span><span class="nav-count" id="count-all">0</span></button>
+				<button class="nav-item" type="button" data-filter="today"><span class="nav-icon icon-today" aria-hidden="true"></span><span>Today</span><span class="nav-count" id="count-today">0</span></button>
+				<button class="nav-item" type="button" data-filter="upcoming"><span class="nav-icon icon-upcoming" aria-hidden="true"></span><span>Upcoming</span><span class="nav-count" id="count-upcoming">0</span></button>
+				<button class="nav-item" type="button" data-filter="completed"><span class="nav-icon icon-done" aria-hidden="true"></span><span>Completed</span><span class="nav-count" id="count-completed">0</span></button>
+			</nav>
+
+			<div class="section-heading"><span class="nav-label">MY LISTS</span><span class="section-dash" aria-hidden="true">—</span></div>
+			<nav class="category-nav" id="category-nav" aria-label="Categories"></nav>
+
+			<div class="sidebar-bottom">
+				<div class="focus-card">
+					<div class="focus-topline"><span class="focus-spark" aria-hidden="true">✳</span><span>DAILY FOCUS</span></div>
+					<p id="focus-copy">A fresh page.<br>Make it count.</p>
+					<div class="focus-progress"><span id="focus-progress"></span></div>
+					<div class="focus-foot"><span id="focus-done">0 done</span><span id="focus-total">0 tasks</span></div>
+				</div>
+				<div class="profile"><span class="avatar" id="profile-avatar">H</span><span class="profile-name" id="profile-name">My workspace</span><button class="logout-button" id="logout" type="button">Sign out</button></div>
+			</div>
+		</aside>
+
+		<main class="main-content">
+			<header class="topbar">
+				<div class="breadcrumbs"><span>Workspace</span><span class="crumb-slash">/</span><strong id="crumb-view">All tasks</strong></div>
+				<div class="topbar-actions">
+					<label class="search-box"><span class="search-icon" aria-hidden="true"></span><input id="search" type="search" placeholder="Search tasks" autocomplete="off"><kbd>/</kbd></label>
+					<span class="date-stamp" id="date-stamp"></span>
+				</div>
+			</header>
+
+			<section class="workspace">
+				<div class="page-heading">
+					<div>
+						<div class="eyebrow"><span class="eyebrow-line"></span><span id="page-eyebrow">YOUR SPACE, IN ORDER</span></div>
+						<h1 id="page-title">All tasks<span class="title-period">.</span></h1>
+						<p class="page-subtitle" id="page-subtitle">A little progress, every day.</p>
+					</div>
+					<button class="primary-button" id="heading-new-task" type="button"><span aria-hidden="true">+</span> Add a task</button>
+				</div>
+
+				<section class="stats-strip" aria-label="Task summary">
+					<div class="stat-block"><span class="stat-label">OPEN TASKS</span><strong id="stat-open">0</strong><span class="stat-note">on your plate</span></div>
+					<div class="stat-block"><span class="stat-label">DUE TODAY</span><strong id="stat-due">0</strong><span class="stat-note">keep an eye on these</span></div>
+					<div class="stat-block stat-progress"><span class="stat-label">COMPLETION</span><strong id="stat-rate">0<span>%</span></strong><span class="stat-note">all-time progress</span></div>
+					<div class="stat-art" aria-hidden="true"><span class="art-ring"></span><span class="art-dot"></span><span class="art-line"></span></div>
+				</section>
+
+				<section class="task-section" aria-labelledby="list-title">
+					<div class="list-toolbar">
+						<div class="list-heading"><h2 id="list-title">Your list</h2><span class="result-count" id="result-count">0</span></div>
+						<label class="toolbar-right" for="task-sort"><span class="sort-label">SORTED BY</span><select class="sort-select" id="task-sort" aria-label="Sort tasks"><option value="priority">Priority</option><option value="dueDate">Due date</option><option value="createdAt">Created at</option></select></label>
+					</div>
+					<div class="task-columns" aria-hidden="true"><span>TASK</span><span>PRIORITY</span><span>CREATED AT</span><span>DUE DATE</span><span></span></div>
+					<ul class="task-list" id="task-list" aria-live="polite"></ul>
+					<div class="empty-state" id="empty-state" hidden>
+						<div class="empty-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+						<h3 id="empty-title">Nothing on the list</h3>
+						<p id="empty-copy">Take a breath, or add a task to get moving.</p>
+						<button class="text-button" id="empty-add" type="button">Create your first task <span aria-hidden="true">→</span></button>
+					</div>
+					<button class="quick-add" id="quick-add" type="button"><span class="quick-plus" aria-hidden="true">+</span><span>Add a task</span><kbd>↵</kbd></button>
+				</section>
+
+				<footer class="workspace-footer"><span>HCM <span class="footer-dot">·</span> MADE FOR THE DOING</span><span id="footer-date"></span></footer>
+			</section>
+		</main>
+	</div>
+
+	<dialog class="task-dialog" id="task-dialog">
+		<form id="task-form">
+			<div class="dialog-top"><span class="dialog-kicker" id="dialog-kicker">NEW TASK</span><button class="dialog-close" type="button" id="dialog-close" aria-label="Close">×</button></div>
+			<div class="task-form-scroll" id="task-form-scroll">
+				<h2 id="dialog-title">Make it happen<span>.</span></h2>
+				<label class="field-label" for="task-title">Task name</label>
+				<input class="title-input" id="task-title" name="title" maxlength="160" placeholder="What needs doing?" required>
+				<label class="field-label" for="task-notes">A few details <span>OPTIONAL</span></label>
+				<textarea id="task-notes" name="notes" rows="3" maxlength="1000" placeholder="Add a note or a little context..."></textarea>
+				<div class="field-grid">
+					<label class="field-label" for="task-category">List
+						<select id="task-category" name="category" required></select>
+					</label>
+					<label class="field-label" for="task-due">Due date
+						<input id="task-due" name="dueDate" type="date">
+					</label>
+				</div>
+				<label class="field-label" for="task-priority">Priority</label>
+				<select id="task-priority" name="priority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select>
+			</div>
+			<div class="dialog-actions"><button class="delete-button" id="delete-task" type="button" hidden>Delete task</button><button class="cancel-button" id="cancel-task" type="button">Cancel</button><button class="primary-button save-button" type="submit" id="save-task">Add task <span aria-hidden="true">→</span></button></div>
+		</form>
+	</dialog>
+</body>
+</html>

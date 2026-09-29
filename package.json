@@ -1,0 +1,21 @@
+{
+  "name": "daymark-todolist",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.client.json && tsc -p tsconfig.server.json",
+    "start": "npm run build && node dist/server.js",
+    "dev": "npm run build && node dist/server.js"
+  },
+  "devDependencies": {
+    "@types/jquery": "^3.5.32",
+    "@types/node": "^24.0.0",
+    "@types/select2": "^4.0.55",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "jquery": "^3.7.1",
+    "select2": "^4.0.13"
+  }
+}
