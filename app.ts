@@ -42,6 +42,9 @@ const sidebarClose = document.querySelector<HTMLButtonElement>('#sidebar-close')
 const sidebarBackdrop = document.querySelector<HTMLButtonElement>('#sidebar-backdrop')!;
 const state = { tasks: [] as Task[], filter: 'all' as ViewFilter, category: null as string | null, sortBy: 'priority' as 'priority' | 'dueDate' | 'createdAt', editingId: null as number | null, user: null as User | null, authMode: 'login' as 'login' | 'register' };
 
+// setSidebarOpen controls the mobile sidebar.
+// Think of it as a small UI helper: it toggles CSS classes and updates ARIA state.
+// The open parameter is a boolean, so TypeScript can enforce a true/false value.
 function setSidebarOpen(open: boolean): void {
   if (!window.matchMedia('(max-width: 700px)').matches) return;
   sidebar.classList.toggle('is-open', open);
@@ -53,6 +56,8 @@ function setSidebarOpen(open: boolean): void {
   else sidebarToggle.focus();
 }
 
+// localDate turns any Date into a YYYY-MM-DD string.
+// Default parameters are a common TypeScript pattern: if no value is passed, new Date() is used.
 const localDate = (date = new Date()): string => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -60,10 +65,14 @@ const localDate = (date = new Date()): string => {
   return `${year}-${month}-${day}`;
 };
 
+// escapeHtml protects text before it is inserted into HTML.
+// This is important because task titles or notes may include characters like <, >, and ".
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 }
 
+// formatDueDate converts a stored date into a friendly label like "Today" or "Tomorrow".
+// TypeScript helps here because the function expects a string and returns a string too.
 function formatDueDate(value: string): string {
   const normalized = value.length === 10 ? `${value}T23:59` : value.replace(' ', 'T');
   const date = new Date(normalized);
@@ -80,11 +89,15 @@ function formatDueDate(value: string): string {
   return timeLabel ? `${dateLabel}, ${timeLabel}` : dateLabel;
 }
 
+// formatCreatedAt formats the timestamp stored in the database into a readable local date/time.
+// This keeps the UI user-friendly without changing the raw data in storage.
 function formatCreatedAt(value: string): string {
   const date = new Date(`${value.replace(' ', 'T')}Z`);
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date);
 }
 
+// localDateTime is similar to localDate, but includes hours and minutes.
+// We use it for comparing due dates against the current time.
 function localDateTime(date = new Date()): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -94,6 +107,8 @@ function localDateTime(date = new Date()): string {
   return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
+// visibleTasks returns only the tasks that match the current filter, category, and search term.
+// It also sorts them before rendering, showing how a function can both compute and transform data.
 function visibleTasks(): Task[] {
   const today = localDate();
   const query = searchInput.value.trim().toLowerCase();
@@ -122,10 +137,14 @@ function visibleTasks(): Task[] {
   });
 }
 
+// compareCreatedAt compares two tasks by timestamp so the list stays predictable.
+// This is a good example of a helper function: it keeps the sorting logic cleaner and reusable.
 function compareCreatedAt(first: Task, second: Task): number {
   return first.createdAt.localeCompare(second.createdAt) || first.id - second.id;
 }
 
+// renderTask turns one Task object into an HTML string for the list view.
+// This is a pure function: it uses inputs and returns a string without mutating the original task.
 function renderTask(task: Task): string {
   const dueText = task.dueDate ? formatDueDate(task.dueDate) : 'No date';
   const dueComparable = task.dueDate?.length === 10 ? `${task.dueDate}T23:59` : task.dueDate?.replace(' ', 'T').slice(0, 16);
@@ -142,6 +161,8 @@ function renderTask(task: Task): string {
   </li>`;
 }
 
+// renderCategories rebuilds the category navigation from the current task list.
+// It shows how a function can derive UI from data and then attach click behavior to each button.
 function renderCategories(): void {
   const categoryCounts = new Map<string, number>();
   for (const task of state.tasks) categoryCounts.set(task.category, (categoryCounts.get(task.category) ?? 0) + 1);
@@ -157,6 +178,8 @@ function renderCategories(): void {
   });
 }
 
+// render is the main UI refresh function.
+// It reads current state, filters and sorts tasks, then updates the DOM with the newest data.
 function render(): void {
   const tasks = visibleTasks();
   taskList.innerHTML = tasks.map(renderTask).join('');
@@ -198,6 +221,8 @@ function render(): void {
   renderCategories();
 }
 
+// request wraps fetch with a typed, reusable API call.
+// It returns the JSON data on success and throws a clear error when the backend responds with an error.
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...options, headers: { 'content-type': 'application/json', ...options?.headers } });
   if (!response.ok) {
@@ -207,11 +232,15 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
 
+// refreshTasks asks the server for the current tasks and then re-renders the list.
+// This is the typical pattern for keeping UI in sync with backend data.
 async function refreshTasks(): Promise<void> {
   state.tasks = await request<Task[]>('/api/tasks');
   render();
 }
 
+// setAuthMode swaps the UI between login and registration modes.
+// Using a union type ('login' | 'register') helps TypeScript catch mistakes automatically.
 function setAuthMode(mode: 'login' | 'register'): void {
   state.authMode = mode;
   const registering = mode === 'register';
@@ -228,6 +257,8 @@ function setAuthMode(mode: 'login' | 'register'): void {
   document.querySelector<HTMLElement>('#auth-error')!.hidden = true;
 }
 
+// showAuthenticatedWorkspace updates the app to the logged-in view.
+// A function like this keeps UI state changes in one place instead of repeating DOM logic everywhere.
 function showAuthenticatedWorkspace(user: User): void {
   state.user = user;
   document.querySelector('#profile-name')!.textContent = user.name;
@@ -236,6 +267,8 @@ function showAuthenticatedWorkspace(user: User): void {
   appShell.hidden = false;
 }
 
+// showSignIn resets the page to the unauthenticated screen.
+// It clears the current task list and hides the workspace area until a user signs in.
 function showSignIn(): void {
   state.user = null;
   state.tasks = [];
@@ -243,12 +276,16 @@ function showSignIn(): void {
   appShell.hidden = true;
 }
 
+// populateTaskLists fills the dropdown with category choices.
+// It makes a reusable UI population helper instead of hard-coding the options in multiple places.
 function populateTaskLists(selectedCategory?: string): void {
   const categorySelect = document.querySelector<HTMLSelectElement>('#task-category')!;
   categorySelect.replaceChildren(new Option('Personal', 'Personal'), new Option('Work', 'Work'));
   categorySelect.value = selectedCategory === 'Work' ? 'Work' : 'Personal';
 }
 
+// initializeSelectControls sets up the fancy select menu used for task priority.
+// It demonstrates a function that configures third-party UI and event handlers.
 function initializeSelectControls(): void {
   $('#task-priority').select2({
     width: '100%',
@@ -266,6 +303,8 @@ function initializeSelectControls(): void {
 
 }
 
+// startApp runs when the app loads.
+// It checks whether the user is already signed in and loads their task data if they are.
 async function startApp(): Promise<void> {
   try {
     const user = await request<User | null>('/api/auth/me');
@@ -282,6 +321,8 @@ async function startApp(): Promise<void> {
   }
 }
 
+// openDialog fills in the task modal with either new task values or an existing task for editing.
+// This is a good example of a function that prepares form data based on runtime state.
 function openDialog(task?: Task): void {
   state.editingId = task?.id ?? null;
   document.querySelector('#dialog-kicker')!.textContent = task ? 'EDIT TASK' : 'NEW TASK';
@@ -298,6 +339,8 @@ function openDialog(task?: Task): void {
   titleInput.focus();
 }
 
+// showError displays a user-friendly error in the page.
+// It accepts unknown because network or runtime errors can come in many shapes.
 function showError(error: unknown): void {
   const message = error instanceof Error ? error.message : 'Something went wrong.';
   const subtitle = document.querySelector<HTMLElement>('#page-subtitle')!;
@@ -306,6 +349,8 @@ function showError(error: unknown): void {
   window.setTimeout(() => subtitle.classList.remove('error-message'), 3200);
 }
 
+// draftFromForm collects the current form inputs and returns a strongly typed task object.
+// This keeps the form-to-server data flow clear and type-safe.
 function draftFromForm(): TaskDraft {
   const data = new FormData(taskForm);
   return {

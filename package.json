@@ -11,11 +11,13 @@
   "devDependencies": {
     "@types/jquery": "^3.5.32",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "@types/select2": "^4.0.55",
     "typescript": "^5.9.0"
   },
   "dependencies": {
     "jquery": "^3.7.1",
+    "pg": "^8.23.0",
     "select2": "^4.0.13"
   }
 }

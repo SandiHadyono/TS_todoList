@@ -1,56 +1,52 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { Pool } from 'pg';
 
 const appDirectory = join(dirname(fileURLToPath(import.meta.url)), '..');
-const dataDirectory = join(appDirectory, 'data');
-mkdirSync(dataDirectory, { recursive: true });
+const database = new Pool({
+  connectionString: process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/daymark',
+});
 
-const database = new DatabaseSync(join(dataDirectory, 'daymark.sqlite'));
-database.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
+async function initializeDatabase(): Promise<void> {
+  await database.query(`
   CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 80),
     email TEXT NOT NULL UNIQUE,
     password_salt TEXT NOT NULL,
     password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 160),
     notes TEXT NOT NULL DEFAULT '',
     category TEXT NOT NULL DEFAULT 'Personal',
     priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('low', 'medium', 'high')),
-    due_date TEXT,
+    due_date TIMESTAMPTZ,
     completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0, 1)),
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
+  CREATE INDEX IF NOT EXISTS tasks_user_idx ON tasks(user_id, completed, due_date);
 `);
-
-const taskColumnsInfo = database.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
-if (!taskColumnsInfo.some((column) => column.name === 'user_id')) {
-  database.exec('ALTER TABLE tasks ADD COLUMN user_id INTEGER REFERENCES users(id)');
+  await database.query('DELETE FROM sessions WHERE expires_at <= $1', [new Date()]);
 }
-database.exec('CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at)');
-database.exec('CREATE INDEX IF NOT EXISTS tasks_user_idx ON tasks(user_id, completed, due_date)');
-database.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(new Date().toISOString());
 
 const taskColumns = `
-  id, title, notes, category, priority, due_date AS dueDate,
-  completed, created_at AS createdAt, updated_at AS updatedAt
+  id, title, notes, category, priority, due_date AS "dueDate",
+  completed, created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 const mimeTypes: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -63,11 +59,15 @@ const vendorFiles: Record<string, string> = {
   '/vendor/select2.min.css': join(appDirectory, 'node_modules/select2/dist/css/select2.min.css'),
 };
 
+// sendJson writes a JSON response to the HTTP client.
+// It is a reusable helper so every API route can respond in the same format.
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(value));
 }
 
+// readJson collects the body of an incoming request, parses it as JSON, and validates it.
+// The return type is a record object, which makes TypeScript safer when you use the data later.
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -82,10 +82,14 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   return value as Record<string, unknown>;
 }
 
+// cleanText removes extra whitespace and limits text length.
+// This keeps user input safe and consistent before it is saved to the database.
 function cleanText(value: unknown, maxLength: number): string {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : '';
 }
 
+// isValidDueDate checks whether a string matches a valid YYYY-MM-DD or YYYY-MM-DDTHH:mm format.
+// The return type is a type guard, which means TypeScript treats the value as a string after this check.
 function isValidDueDate(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/);
@@ -104,6 +108,8 @@ function isValidDueDate(value: unknown): value is string {
     && date.getMinutes() === minute;
 }
 
+// normalizeDueDate makes a date-only value easier to compare and store consistently.
+// If the input is just a date, it adds a time so the app can work with one common format.
 function normalizeDueDate(value: string): string {
   return value.length === 10 ? `${value}T00:00:00` : value;
 }
@@ -114,49 +120,59 @@ interface AuthenticatedUser {
   email: string;
 }
 
+// findSessionToken reads the browser cookie and extracts the session token.
+// This is how the server identifies who is logged in on each request.
 function findSessionToken(request: IncomingMessage): string | null {
   const cookieHeader = request.headers.cookie ?? '';
   const sessionCookie = cookieHeader.split(';').map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith('hcm_session='));
   return sessionCookie?.slice('hcm_session='.length) || null;
 }
 
-function findUserForRequest(request: IncomingMessage): AuthenticatedUser | null {
+// findUserForRequest looks up the active user for a request using the session token.
+// If no token exists or it has expired, the function returns null.
+async function findUserForRequest(request: IncomingMessage): Promise<AuthenticatedUser | null> {
   const token = findSessionToken(request);
   if (!token) return null;
   const tokenHash = createHash('sha256').update(token).digest('hex');
-  const row = database.prepare(`
+  const result = await database.query<AuthenticatedUser>(`
     SELECT users.id, users.name, users.email
     FROM sessions JOIN users ON users.id = sessions.user_id
-    WHERE sessions.token_hash = ? AND sessions.expires_at > ?
-  `).get(tokenHash, new Date().toISOString()) as AuthenticatedUser | undefined;
-  return row ?? null;
+    WHERE sessions.token_hash = $1 AND sessions.expires_at > $2
+  `, [tokenHash, new Date()]);
+  return result.rows[0] ?? null;
 }
 
+// sessionCookie builds a secure cookie string for the authenticated user.
+// It is a simple helper function because the same cookie format is used across login and logout.
 function sessionCookie(token: string, maxAge: number): string {
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   return `hcm_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`;
 }
 
-function createSession(userId: number, response: ServerResponse): void {
+// createSession creates a random session token, stores its hash, and sends the cookie to the browser.
+// This pattern is common in web apps when you want to keep a user logged in without storing plain text secrets.
+async function createSession(userId: number, response: ServerResponse): Promise<void> {
   const token = randomBytes(32).toString('base64url');
   const tokenHash = createHash('sha256').update(token).digest('hex');
-  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
-  database.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(tokenHash, userId, expiresAt);
+  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  await database.query('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)', [tokenHash, userId, expiresAt]);
   response.setHeader('set-cookie', sessionCookie(token, 14 * 24 * 60 * 60));
 }
 
+// handleAuthApi handles login, registration, logout, and session lookup routes.
+// It returns true when it handled the route so the main API handler does not continue processing it.
 async function handleAuthApi(request: IncomingMessage, response: ServerResponse, pathname: string): Promise<boolean> {
   if (!pathname.startsWith('/api/auth/')) return false;
 
   if (pathname === '/api/auth/me' && request.method === 'GET') {
-    const user = findUserForRequest(request);
+    const user = await findUserForRequest(request);
     sendJson(response, 200, user);
     return true;
   }
 
   if (pathname === '/api/auth/logout' && request.method === 'POST') {
     const token = findSessionToken(request);
-    if (token) database.prepare('DELETE FROM sessions WHERE token_hash = ?').run(createHash('sha256').update(token).digest('hex'));
+    if (token) await database.query('DELETE FROM sessions WHERE token_hash = $1', [createHash('sha256').update(token).digest('hex')]);
     response.setHeader('set-cookie', sessionCookie('', 0));
     response.writeHead(204);
     response.end();
@@ -181,22 +197,19 @@ async function handleAuthApi(request: IncomingMessage, response: ServerResponse,
       const salt = randomBytes(16).toString('hex');
       const passwordHash = scryptSync(password, salt, 64).toString('hex');
       try {
-        database.exec('BEGIN IMMEDIATE');
-        const result = database.prepare('INSERT INTO users (name, email, password_salt, password_hash) VALUES (?, ?, ?, ?)').run(name, email, salt, passwordHash);
-        const userId = Number(result.lastInsertRowid);
-        database.prepare('UPDATE tasks SET user_id = ? WHERE user_id IS NULL').run(userId);
-        database.exec('COMMIT');
-        createSession(userId, response);
+        const result = await database.query<{ id: number }>('INSERT INTO users (name, email, password_salt, password_hash) VALUES ($1, $2, $3, $4) RETURNING id', [name, email, salt, passwordHash]);
+        const userId = result.rows[0].id;
+        await createSession(userId, response);
         sendJson(response, 201, { id: userId, name, email });
       } catch (error) {
-        database.exec('ROLLBACK');
-        const isDuplicate = error instanceof Error && error.message.includes('UNIQUE constraint failed');
+        const isDuplicate = error instanceof Error && 'code' in error && error.code === '23505';
         sendJson(response, isDuplicate ? 409 : 500, { error: isDuplicate ? 'An account with that email already exists.' : 'Could not create your account.' });
       }
       return true;
     }
 
-    const userRow = database.prepare('SELECT id, name, email, password_salt, password_hash FROM users WHERE email = ?').get(email) as (AuthenticatedUser & { password_salt: string; password_hash: string }) | undefined;
+    const userResult = await database.query<AuthenticatedUser & { password_salt: string; password_hash: string }>('SELECT id, name, email, password_salt, password_hash FROM users WHERE email = $1', [email]);
+    const userRow = userResult.rows[0];
     if (!userRow) {
       scryptSync(password, 'hcm-invalid-login-salt', 64);
       sendJson(response, 401, { error: 'Email or password is incorrect.' });
@@ -208,7 +221,7 @@ async function handleAuthApi(request: IncomingMessage, response: ServerResponse,
       sendJson(response, 401, { error: 'Email or password is incorrect.' });
       return true;
     }
-    createSession(userRow.id, response);
+    await createSession(userRow.id, response);
     sendJson(response, 200, { id: userRow.id, name: userRow.name, email: userRow.email });
     return true;
   }
@@ -217,6 +230,8 @@ async function handleAuthApi(request: IncomingMessage, response: ServerResponse,
   return true;
 }
 
+// handleApi is the main task API router.
+// It enforces auth, validates the route, and performs CRUD operations on tasks.
 async function handleApi(request: IncomingMessage, response: ServerResponse, pathname: string): Promise<void> {
   if (await handleAuthApi(request, response, pathname)) return;
 
@@ -226,7 +241,7 @@ async function handleApi(request: IncomingMessage, response: ServerResponse, pat
     return;
   }
 
-  const user = findUserForRequest(request);
+  const user = await findUserForRequest(request);
   if (!user) {
     sendJson(response, 401, { error: 'Sign in to continue.' });
     return;
@@ -234,8 +249,8 @@ async function handleApi(request: IncomingMessage, response: ServerResponse, pat
 
   const taskId = taskPath[1] ? Number(taskPath[1]) : null;
   if (request.method === 'GET' && taskId === null) {
-    const tasks = database.prepare(`SELECT ${taskColumns} FROM tasks WHERE user_id = ? ORDER BY completed ASC, created_at DESC, id DESC`).all(user.id);
-    sendJson(response, 200, tasks);
+    const result = await database.query(`SELECT ${taskColumns} FROM tasks WHERE user_id = $1 ORDER BY completed ASC, created_at DESC, id DESC`, [user.id]);
+    sendJson(response, 200, result.rows);
     return;
   }
 
@@ -248,53 +263,56 @@ async function handleApi(request: IncomingMessage, response: ServerResponse, pat
       const priority = body.priority === 'high' || body.priority === 'low' ? body.priority : 'medium';
       if (body.dueDate !== null && body.dueDate !== undefined && body.dueDate !== '' && !isValidDueDate(body.dueDate)) return sendJson(response, 400, { error: 'Invalid due date and time.' });
       const dueDate = body.dueDate ? normalizeDueDate(body.dueDate as string) : null;
-      const result = database.prepare('INSERT INTO tasks (user_id, title, notes, category, priority, due_date) VALUES (?, ?, ?, ?, ?, ?)').run(user.id, title, notes, category, priority, dueDate);
-      const task = database.prepare(`SELECT ${taskColumns} FROM tasks WHERE id = ? AND user_id = ?`).get(Number(result.lastInsertRowid), user.id);
-      sendJson(response, 201, task);
+      const result = await database.query<{ id: number }>('INSERT INTO tasks (user_id, title, notes, category, priority, due_date) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id', [user.id, title, notes, category, priority, dueDate]);
+      const task = await database.query(`SELECT ${taskColumns} FROM tasks WHERE id = $1 AND user_id = $2`, [result.rows[0].id, user.id]);
+      sendJson(response, 201, task.rows[0]);
     return;
   }
 
   if (request.method === 'PATCH' && taskId !== null) {
     const body = await readJson(request);
       const fields: string[] = [];
-      const values: (string | number | null)[] = [];
+      const values: (string | number | null | boolean)[] = [];
       if ('title' in body) {
         const title = cleanText(body.title, 160);
         if (!title) return sendJson(response, 400, { error: 'A task name is required.' });
-        fields.push('title = ?');
+        fields.push(`title = $${values.length + 1}`);
         values.push(title);
       }
-      if ('notes' in body) { fields.push('notes = ?'); values.push(cleanText(body.notes, 1000)); }
-      if ('category' in body) { fields.push('category = ?'); values.push(cleanText(body.category, 40) || 'Personal'); }
+      if ('notes' in body) { fields.push(`notes = $${values.length + 1}`); values.push(cleanText(body.notes, 1000)); }
+      if ('category' in body) { fields.push(`category = $${values.length + 1}`); values.push(cleanText(body.category, 40) || 'Personal'); }
       if ('priority' in body) {
         if (!['low', 'medium', 'high'].includes(String(body.priority))) return sendJson(response, 400, { error: 'Invalid priority.' });
-        fields.push('priority = ?');
+        fields.push(`priority = $${values.length + 1}`);
         values.push(String(body.priority));
       }
       if ('dueDate' in body) {
         const dueDate = body.dueDate;
         if (dueDate !== null && !isValidDueDate(dueDate)) return sendJson(response, 400, { error: 'Invalid due date and time.' });
-        fields.push('due_date = ?');
+        fields.push(`due_date = $${values.length + 1}`);
         values.push(dueDate === null ? null : normalizeDueDate(dueDate as string));
       }
       if ('completed' in body) {
         if (typeof body.completed !== 'boolean') return sendJson(response, 400, { error: 'Invalid completion state.' });
-        fields.push('completed = ?');
+        fields.push(`completed = $${values.length + 1}`);
         values.push(body.completed ? 1 : 0);
       }
       if (fields.length === 0) return sendJson(response, 400, { error: 'No task changes provided.' });
       fields.push('updated_at = CURRENT_TIMESTAMP');
+      const taskParameter = values.length + 1;
+      const userParameter = values.length + 2;
       values.push(taskId);
       values.push(user.id);
-      const result = database.prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`).run(...values);
-      if (result.changes === 0) return sendJson(response, 404, { error: 'Task not found.' });
-      sendJson(response, 200, database.prepare(`SELECT ${taskColumns} FROM tasks WHERE id = ? AND user_id = ?`).get(taskId, user.id));
+      const result = await database.query(`UPDATE tasks SET ${fields.join(', ')} WHERE id = $${taskParameter} AND user_id = $${userParameter}`, values);
+      if (result.rowCount === 0) return sendJson(response, 404, { error: 'Task not found.' });
+      const task = await database.query(`SELECT ${taskColumns} FROM tasks WHERE id = $1 AND user_id = $2`, [taskId, user.id]);
+      sendJson(response, 200, task.rows[0]);
     return;
   }
 
   if (request.method === 'DELETE' && taskId !== null) {
-    const result = database.prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?').run(taskId, user.id);
-    if (result.changes === 0) return sendJson(response, 404, { error: 'Task not found.' });
+    const result = await database.query('DELETE FROM tasks WHERE id = $1 AND user_id = $2', [taskId, user.id]);
+    if (result.rowCount === 0) return sendJson(response, 404, { error: 'Task not found.' });
     response.writeHead(204);
     response.end();
     return;
@@ -343,15 +361,21 @@ const server = createServer((request, response) => {
 });
 
 const port = Number(process.env.PORT ?? 5173);
-server.listen(port, '127.0.0.1', () => {
-  console.log(`HCM is ready at http://localhost:${port}`);
-});
-
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     server.close(() => {
-      database.close();
-      process.exit(0);
+      void database.end().finally(() => process.exit(0));
     });
   });
 }
+
+void initializeDatabase()
+  .then(() => {
+    server.listen(port, '127.0.0.1', () => {
+      console.log(`HCM is ready at http://localhost:${port}`);
+    });
+  })
+  .catch((error: unknown) => {
+    console.error('Could not initialize PostgreSQL:', error);
+    void database.end().finally(() => process.exit(1));
+  });

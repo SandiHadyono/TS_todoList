@@ -114,7 +114,7 @@ Priority semantics:
 
 1. App startup requests `/api/auth/me`.
 2. A signed-out response displays the auth screen; an authenticated response loads the workspace and the current user's tasks.
-3. Registration/login creates an opaque random session token. Only its SHA-256 hash is stored in SQLite.
+3. Registration/login creates an opaque random session token. Only its SHA-256 hash is stored in PostgreSQL.
 4. The session token is set in an HttpOnly, SameSite=Lax cookie with a 14-day lifetime.
 5. Task APIs resolve the session to a user and scope reads, updates, and deletes to that user ID.
 6. Passwords are stored as salted scrypt hashes.
@@ -123,5 +123,5 @@ Priority semantics:
 
 - No component framework or bundler is used.
 - TypeScript is built with separate client and server configs.
-- SQLite support uses Node's built-in `node:sqlite` module, which is experimental in the runtime version used by this app.
+- PostgreSQL support uses the `pg` connection pool and the `DATABASE_URL` environment variable.
 - The CSS currently includes compact, grouped rules; new styles should continue to use the existing tokens and breakpoints (`950px`, `700px`, and `390px`).
