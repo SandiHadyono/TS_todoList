@@ -1,4 +1,4 @@
-# Daymark Todo List
+# Simple Todo List
 
 A small task manager app built with TypeScript, Node.js, PostgreSQL, and a browser UI. It includes user authentication, task CRUD operations, filtering, categories, and due dates.
 
